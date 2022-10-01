@@ -2,6 +2,11 @@
 let s:originalCpo = &cpo
 set cpo&vim
 
+if !exists("s:init")
+	let s:init = 1
+	silent! let s:log = logger#getLogger(expand('<sfile>:t'))
+endif
+
 if !exists("g:qf_modifiable")
 	let g:qf_modifiable = 1
 endif
@@ -124,7 +129,7 @@ function! s:OnWrite() abort
 	let qfWinView = winsaveview()
 	call s:Replace(changes)
 	call sort(qfList, 's:CompareEntryInBuffer')
-	call s:setQfOrLocationList(qfList, isLocationList, qfWinNumber)
+	"call s:setQfOrLocationList(qfList, isLocationList, qfWinNumber)
 	setlocal nomodified
 	call winrestview(qfWinView)
 	call s:PrepareBuffer()
@@ -153,10 +158,18 @@ endfunction
 function! s:Replace(changes) abort
 	let switchbufOriginal = &switchbuf
 	let &switchbuf = ''
-	let successfulChanges = 0
+	let hasError = 0
 	let bufferHasChanged = {}
+    " If sameline has two match pattern, should ignore the 2nd one
+    let seen = {}
 	let tabPageOriginal = tabpagenr()
 	for change in a:changes
+        let seen_key = change.qfEntry.bufnr..":"..change.qfEntry.lnum
+        if has_key(seen, seen_key)
+			silent! call s:log.debug("duplicate line, ignore: ", seen_key)
+            continue
+        endif
+
 		let bufferWasListed = buflisted(change.qfEntry.bufnr)
 		execute 'tab sbuffer ' . change.qfEntry.bufnr
 		let originalFromQfEscaped = escape(change.originalFromQf, '/\')
@@ -166,17 +179,29 @@ function! s:Replace(changes) abort
 		let commonInQfAndFile = commonContext.original
 		let commonInQfAndFile_replacement = commonContext.replacement
 		let isUniqueMatchInLine = s:HasSubstringOnce(getline(change.qfEntry.lnum), commonInQfAndFile)
+        let seen[seen_key] = "done"
 		if strlen(commonInQfAndFile) >= 3 && isUniqueMatchInLine
 			if g:qf_join_changes && has_key(bufferHasChanged, change.qfEntry.bufnr)
 				undojoin
 			endif
-			execute change.qfEntry.lnum . 'snomagic/\V' . commonInQfAndFile . '/' . commonInQfAndFile_replacement . '/'
+
+			try
+				" The following substitute will cause error: Vim not-enough-space
+				" 14%snomagic/\Vif ((server_sock = ct_socket_server(local_port)) < 0) { \/\/ ct_socket_server/if ((server_sock = ct_socket_server01(local_port)) < 0) { \/\/ ct_socket_server01/
+				"silent! call s:log.debug("before action: ", commonInQfAndFile, " To:", commonInQfAndFile_replacement)
+				"let @x = "reallyReallySuperLongVariableNameWithSpamAndEggs"
+				execute change.qfEntry.lnum . 'snomagic/\V' . commonInQfAndFile . '/' . commonInQfAndFile_replacement . '/'
+				"silent! call s:log.debug("after action: ", commonInQfAndFile, " To:", commonInQfAndFile_replacement)
+			catch
+				let hasError += 1
+				norm U
+			endtry
+
 			if g:qf_write_changes == 1
 				write
 				silent doautocmd User QfReplacementBufWritePost
 			endif
 			let change.qfEntry.text = change.replacementFromQf
-			let successfulChanges += 1
 			let bufferHasChanged[change.qfEntry.bufnr] = 1
 		else
 			let change.qfEntry.text = substitute(change.qfEntry.text, '^\v(\[ERROR\])?', '[ERROR]', '')
@@ -191,9 +216,10 @@ function! s:Replace(changes) abort
 		endif
 	endfor
 	let &switchbuf = switchbufOriginal
-	if successfulChanges < len(a:changes)
+
+	if hasError
 		echohl WarningMsg
-		echomsg successfulChanges . '/' . len(a:changes) . ' changes applied. See lines marked [ERROR].'
+		echomsg hasError . '/' . len(a:changes) . ' applied fail.'
 		" Echo another line. Without this, the previous warning is sometimes
 		" overwritten when replacing something in an open buffer
 		echo ''
@@ -269,4 +295,4 @@ endfunction
 
 let &cpo = s:originalCpo
 
-" vim:ts=2:sw=2:sts=2
+" vim:ts=4:sw=4:sts=4
