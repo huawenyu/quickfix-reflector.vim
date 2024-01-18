@@ -54,6 +54,10 @@ function! s:OnWrite() abort
 	if !&modified
 		return
 	endif
+	if ! getbufinfo('%')[0].changed
+		return
+	endif
+
 	if empty(s:qfBufferLines)
 		echoerr "quickfix_reflector not initialized in this buffer (empty). Try :copen again."
 		return
